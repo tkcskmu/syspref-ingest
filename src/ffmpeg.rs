@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::process::Command;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -39,6 +41,14 @@ pub(crate) fn validate_profiles(profiles: &[FfmpegProfile]) -> Result<()> {
             .map_err(|e| anyhow!("profile '{}': {}", p.name, e))?;
     }
     Ok(())
+}
+
+/// Worker-facing port. Production wires `FfmpegRunner` into `Arc<dyn Transcoder>`;
+/// tests substitute `MockTranscoder`. See `docs/TEST_PLAN.md` Mock Transcoder section.
+#[async_trait]
+pub trait Transcoder: Send + Sync {
+    async fn run(&self, input: &Path, output: &Path, profile: &str) -> Result<()>;
+    fn get_profile(&self, name: &str) -> Option<&FfmpegProfile>;
 }
 
 #[derive(Clone)]
@@ -88,6 +98,17 @@ impl FfmpegRunner {
         } else {
             Err(anyhow!("FFmpeg failed with status: {}", status))
         }
+    }
+}
+
+#[async_trait]
+impl Transcoder for FfmpegRunner {
+    async fn run(&self, input: &Path, output: &Path, profile: &str) -> Result<()> {
+        FfmpegRunner::run(self, input, output, profile).await
+    }
+
+    fn get_profile(&self, name: &str) -> Option<&FfmpegProfile> {
+        FfmpegRunner::get_profile(self, name)
     }
 }
 

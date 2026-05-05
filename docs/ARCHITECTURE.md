@@ -26,8 +26,14 @@ The system does not use a database. Runtime job state is stored in memory, while
 | Dedup Registry | Ensure one canonical job per `(content_sha256, profile_name)` |
 | Job Queue | Deliver each queued `JobId` to at most one worker |
 | Worker Pool | Move jobs through `queued -> running -> succeeded/failed` |
-| FFmpeg Runner | Build commands from server-side YAML profiles only |
+| Transcoder | Worker-facing port. Production adapter is `FfmpegRunner` (builds commands from server-side YAML profiles only). Tests substitute a mock implementation of the same trait |
 | Local Storage | Store temporary uploads, canonical inputs, and output artifacts |
+
+Workers depend on the `Transcoder` trait, not the concrete `FfmpegRunner`.
+Production wires `Arc::new(FfmpegRunner::new(profiles))` into
+`Arc<dyn Transcoder>`; worker-pool tests substitute `MockTranscoder` so CI
+does not require an `ffmpeg` binary (`docs/TEST_PLAN.md` Mock Transcoder
+section).
 
 ## Shared Registry
 

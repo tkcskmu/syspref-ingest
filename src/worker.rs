@@ -1,5 +1,5 @@
 use crate::dedup::RegistryArc;
-use crate::ffmpeg::FfmpegRunner;
+use crate::ffmpeg::Transcoder;
 use crate::queue::JobReceiver;
 use crate::shared::AppResult;
 use crate::storage::Storage;
@@ -15,7 +15,7 @@ pub struct Worker {
     id: usize,
     registry: RegistryArc,
     queue_rx: JobReceiver,
-    ffmpeg_runner: Arc<FfmpegRunner>,
+    transcoder: Arc<dyn Transcoder>,
     storage: Arc<Storage>,
 }
 
@@ -24,14 +24,14 @@ impl Worker {
         id: usize,
         registry: RegistryArc,
         queue_rx: JobReceiver,
-        ffmpeg_runner: Arc<FfmpegRunner>,
+        transcoder: Arc<dyn Transcoder>,
         storage: Arc<Storage>,
     ) -> Self {
         Worker {
             id,
             registry,
             queue_rx,
-            ffmpeg_runner,
+            transcoder,
             storage,
         }
     }
@@ -69,7 +69,7 @@ impl Worker {
             // Resolve output extension from profile. The profile was validated
             // at startup, so a missing entry here is an invariant violation:
             // fail the job rather than silently fall back.
-            let ext = match self.ffmpeg_runner.get_profile(&profile_name) {
+            let ext = match self.transcoder.get_profile(&profile_name) {
                 Some(p) => p.output_extension.clone(),
                 None => {
                     let mut registry = self.registry.lock().await;
@@ -87,7 +87,7 @@ impl Worker {
             let output_dir = self.storage.job_output_path(&job_id);
             let output_path: PathBuf = build_proxy_output_path(&output_dir, &ext);
             let result = self
-                .ffmpeg_runner
+                .transcoder
                 .run(&input_path, &output_path, &profile_name)
                 .await;
 
@@ -124,7 +124,7 @@ impl WorkerPool {
         size: usize,
         registry: RegistryArc,
         queue_rx: JobReceiver,
-        ffmpeg_runner: Arc<FfmpegRunner>,
+        transcoder: Arc<dyn Transcoder>,
         storage: Arc<Storage>,
     ) -> Self {
         let workers = (0..size)
@@ -133,7 +133,7 @@ impl WorkerPool {
                     id,
                     registry.clone(),
                     queue_rx.clone(),
-                    ffmpeg_runner.clone(),
+                    transcoder.clone(),
                     storage.clone(),
                 )
             })

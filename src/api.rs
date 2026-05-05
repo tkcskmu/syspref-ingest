@@ -1,5 +1,5 @@
 use crate::dedup::RegistryArc;
-use crate::ffmpeg::FfmpegRunner;
+use crate::ffmpeg::Transcoder;
 use crate::queue::JobSender;
 use crate::shared::{DedupKey, Job, JobStatus};
 use crate::storage::Storage;
@@ -22,7 +22,7 @@ pub struct AppState {
     pub registry: RegistryArc,
     pub storage: Arc<Storage>,
     pub queue_tx: JobSender,
-    pub ffmpeg_runner: Arc<FfmpegRunner>,
+    pub transcoder: Arc<dyn Transcoder>,
 }
 
 fn ext_to_mime(ext: &str) -> &'static str {
@@ -256,7 +256,7 @@ pub async fn get_artifact(
                 .ok_or_else(|| internal(format!("profile '{}' artifact missing", job.profile)))?
                 .path;
             let profile = state
-                .ffmpeg_runner
+                .transcoder
                 .get_profile(&job.profile)
                 .ok_or_else(|| internal(format!("profile '{}' missing at runtime", job.profile)))?;
             let ext = profile.output_extension.clone();
@@ -291,13 +291,13 @@ pub fn create_router(
     registry: RegistryArc,
     storage: Arc<Storage>,
     queue_tx: JobSender,
-    ffmpeg_runner: Arc<FfmpegRunner>,
+    transcoder: Arc<dyn Transcoder>,
 ) -> Router {
     let state = AppState {
         registry,
         storage,
         queue_tx,
-        ffmpeg_runner,
+        transcoder,
     };
 
     // axum 0.7 + matchit 0.7 use ":name" path-param syntax; "{name}" is matchit 0.8 / axum 0.8.
@@ -314,7 +314,7 @@ pub fn create_router(
 mod tests {
     use super::*;
     use crate::dedup::create_registry;
-    use crate::ffmpeg::FfmpegProfile;
+    use crate::ffmpeg::{FfmpegProfile, FfmpegRunner};
     use crate::queue::create_queue;
     use crate::shared::Job;
 
@@ -348,7 +348,7 @@ mod tests {
         }
 
         let storage = Arc::new(Storage::new(tmp.path()));
-        let runner = Arc::new(FfmpegRunner::new(vec![FfmpegProfile {
+        let transcoder: Arc<dyn Transcoder> = Arc::new(FfmpegRunner::new(vec![FfmpegProfile {
             name: profile_name.to_string(),
             args: vec![],
             output_extension: ext.to_string(),
@@ -359,7 +359,7 @@ mod tests {
             registry,
             storage,
             queue_tx,
-            ffmpeg_runner: runner,
+            transcoder,
         };
         (state, job_id, tmp)
     }
@@ -407,7 +407,7 @@ mod tests {
         }
 
         let storage = Arc::new(Storage::new(tmp.path()));
-        let runner = Arc::new(FfmpegRunner::new(vec![FfmpegProfile {
+        let transcoder: Arc<dyn Transcoder> = Arc::new(FfmpegRunner::new(vec![FfmpegProfile {
             name: "different_profile".to_string(),
             args: vec![],
             output_extension: "mp4".to_string(),
@@ -417,7 +417,7 @@ mod tests {
             registry,
             storage,
             queue_tx,
-            ffmpeg_runner: runner,
+            transcoder,
         };
 
         let err = get_artifact(State(state), Path(job_id))

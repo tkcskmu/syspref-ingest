@@ -10,10 +10,11 @@ mod worker;
 use anyhow::Result;
 use config::Config;
 use dedup::{create_registry, RegistryArc};
-use ffmpeg::{FfmpegProfile, FfmpegRunner};
+use ffmpeg::{FfmpegProfile, FfmpegRunner, Transcoder};
 use queue::create_queue;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use storage::Storage;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -70,25 +71,31 @@ async fn main() -> Result<()> {
         ffmpeg::load_profiles_from_yaml(&profiles_yaml)?
     };
 
-    let ffmpeg_runner = std::sync::Arc::new(FfmpegRunner::new(profiles));
+    // Wire production runner behind the Transcoder port. Both the worker pool
+    // and the artifact handler depend on `Arc<dyn Transcoder>`, not the
+    // concrete `FfmpegRunner`, so tests can substitute a mock with the same
+    // trait surface (docs/TEST_PLAN.md mock transcoder section). The trait
+    // exposes `get_profile`, which the artifact handler uses for the
+    // output_extension lookup added in [07/10].
+    let transcoder: Arc<dyn Transcoder> = Arc::new(FfmpegRunner::new(profiles));
 
     // Initialize shared state
     let registry: RegistryArc = create_registry();
     let (queue_tx, queue_rx) = create_queue();
-    let storage = std::sync::Arc::new(storage);
+    let storage = Arc::new(storage);
 
     // Start worker pool (consumers share the receiver via Arc<Mutex<_>>)
     let worker_pool = worker::WorkerPool::new(
         4,
         registry.clone(),
         queue_rx.clone(),
-        ffmpeg_runner.clone(),
+        transcoder.clone(),
         storage.clone(),
     );
     worker_pool.start().await;
 
-    // Create router (producer side holds the sender + profile lookup)
-    let app = api::create_router(registry, storage.clone(), queue_tx, ffmpeg_runner)
+    // Create router (producer side holds the sender + profile lookup via trait)
+    let app = api::create_router(registry, storage.clone(), queue_tx, transcoder)
         .layer(TraceLayer::new_for_http());
 
     // Start server
