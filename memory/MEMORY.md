@@ -1,0 +1,2 @@
+- [Project Build Fixes](memory/project_build_fixes.md) — Fixed axum 0.7 API changes and type issues in syspref-ingest project
+- [Tests Added](memory/tests_added.md) — Implemented unit tests for dedup registry and job status transitions
