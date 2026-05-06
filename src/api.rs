@@ -1,12 +1,13 @@
 use crate::dedup::RegistryArc;
 use crate::ffmpeg::FfmpegRunner;
 use crate::queue::JobSender;
-use crate::shared::{DedupKey, Job};
+use crate::shared::{DedupKey, Job, JobStatus};
 use crate::storage::Storage;
 use axum::{
+    body::Body,
     extract::multipart::Multipart,
     extract::{Path, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::Json,
     routing::{get, post},
     Router,
@@ -14,6 +15,7 @@ use axum::{
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::fs;
+use tokio_util::io::ReaderStream;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -167,52 +169,54 @@ pub async fn create_job(
     Ok(Json(response))
 }
 
+fn status_str(status: JobStatus) -> &'static str {
+    match status {
+        JobStatus::Queued => "queued",
+        JobStatus::Running => "running",
+        JobStatus::Succeeded => "succeeded",
+        JobStatus::Failed => "failed",
+    }
+}
+
 pub async fn get_job(
     State(state): State<AppState>,
     Path(job_id): Path<uuid::Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let registry = state.registry.lock().await;
-    let job = registry
-        .get_job(&job_id)
-        .ok_or((StatusCode::NOT_FOUND, format!("Job {} not found", job_id)))?;
+    // docs/ARCHITECTURE.md: snapshot under lock, then serialize after lock drops.
+    let job = {
+        let registry = state.registry.lock().await;
+        registry.get_job(&job_id).cloned()
+    }
+    .ok_or((StatusCode::NOT_FOUND, format!("unknown_job_id: {}", job_id)))?;
 
-    let response = serde_json::json!({
+    Ok(Json(serde_json::json!({
         "job_id": job.job_id.to_string(),
-        "status": match job.status {
-            crate::shared::JobStatus::Queued => "queued",
-            crate::shared::JobStatus::Running => "running",
-            crate::shared::JobStatus::Succeeded => "succeeded",
-            crate::shared::JobStatus::Failed => "failed",
-        },
+        "status": status_str(job.status),
         "profile": job.profile,
         "content_hash": job.content_hash,
         "created_at": job.created_at.to_rfc3339(),
         "started_at": job.started_at.map(|t| t.to_rfc3339()),
         "finished_at": job.finished_at.map(|t| t.to_rfc3339()),
         "artifact": job.artifact.as_ref().map(|a| a.path.display().to_string()),
-        "error": job.error
-    });
-
-    Ok(Json(response))
+        "error": job.error,
+    })))
 }
 
 pub async fn list_jobs(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let registry = state.registry.lock().await;
-    let jobs: Vec<&Job> = registry.get_jobs();
+    // docs/ARCHITECTURE.md: snapshot under lock, then serialize after lock drops.
+    let jobs: Vec<Job> = {
+        let registry = state.registry.lock().await;
+        registry.get_jobs().into_iter().cloned().collect()
+    };
 
     let job_list: Vec<serde_json::Value> = jobs
         .iter()
         .map(|j| {
             serde_json::json!({
                 "job_id": j.job_id.to_string(),
-                "status": match j.status {
-                    crate::shared::JobStatus::Queued => "queued",
-                    crate::shared::JobStatus::Running => "running",
-                    crate::shared::JobStatus::Succeeded => "succeeded",
-                    crate::shared::JobStatus::Failed => "failed",
-                },
+                "status": status_str(j.status),
                 "profile": j.profile,
-                "content_hash": j.content_hash
+                "content_hash": j.content_hash,
             })
         })
         .collect();
@@ -224,57 +228,62 @@ pub async fn get_artifact(
     State(state): State<AppState>,
     Path(job_id): Path<uuid::Uuid>,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
-    // Snapshot the job under the registry lock and drop the lock before any I/O.
-    // This satisfies docs/ARCHITECTURE.md:88-97 (no .await while holding the lock).
-    let snapshot = {
+    // docs/ARCHITECTURE.md: snapshot under lock, drop guard before any .await.
+    let job = {
         let registry = state.registry.lock().await;
         registry.get_job(&job_id).cloned()
+    }
+    .ok_or((StatusCode::NOT_FOUND, format!("unknown_job_id: {}", job_id)))?;
+
+    let internal = |msg: String| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("internal_error: {}", msg),
+        )
     };
 
-    let job = snapshot.ok_or((StatusCode::NOT_FOUND, format!("Job {} not found", job_id)))?;
-
     match job.status {
-        crate::shared::JobStatus::Succeeded => {
-            // The artifact-missing-on-succeeded case keeps the existing 404; full
-            // artifact-endpoint status code alignment is the scope of issue #4.
-            let artifact = job
+        JobStatus::Queued | JobStatus::Running => {
+            Err((StatusCode::CONFLICT, "artifact_not_ready".to_string()))
+        }
+        JobStatus::Failed => Err((
+            StatusCode::CONFLICT,
+            format!("job_failed: {}", job.error.as_deref().unwrap_or("")),
+        )),
+        JobStatus::Succeeded => {
+            let path = job
                 .artifact
-                .as_ref()
-                .ok_or((StatusCode::NOT_FOUND, "Artifact not found".to_string()))?;
-            let profile = state.ffmpeg_runner.get_profile(&job.profile).ok_or((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("profile '{}' missing at runtime", job.profile),
-            ))?;
+                .ok_or_else(|| internal(format!("profile '{}' artifact missing", job.profile)))?
+                .path;
+            let profile = state
+                .ffmpeg_runner
+                .get_profile(&job.profile)
+                .ok_or_else(|| internal(format!("profile '{}' missing at runtime", job.profile)))?;
             let ext = profile.output_extension.clone();
             let mime = ext_to_mime(&ext);
-            let bytes = fs::read(&artifact.path).await.map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to read artifact: {}", e),
-                )
-            })?;
+
+            // Stream the artifact to avoid loading large files into memory.
+            // Body::from_stream does not set Content-Length; do it explicitly.
+            let len = fs::metadata(&path)
+                .await
+                .map_err(|e| internal(e.to_string()))?
+                .len();
+            let file = fs::File::open(&path)
+                .await
+                .map_err(|e| internal(e.to_string()))?;
+            let body = Body::from_stream(ReaderStream::new(file));
+
             axum::response::Response::builder()
-                .header("Content-Type", mime)
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, mime)
                 .header(
-                    "Content-Disposition",
-                    format!("attachment; filename=\"{}.{}\"", job.job_id, ext),
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}.{}\"", job_id, ext),
                 )
-                .body(bytes.into())
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("response build failed: {}", e),
-                    )
-                })
+                .header(header::CONTENT_LENGTH, len.to_string())
+                .body(body)
+                .map_err(|e| internal(e.to_string()))
         }
-        crate::shared::JobStatus::Queued | crate::shared::JobStatus::Running => Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Job not completed yet".to_string(),
-        )),
-        crate::shared::JobStatus::Failed => Err((
-            StatusCode::BAD_GATEWAY,
-            format!("Job failed: {:?}", job.error),
-        )),
     }
 }
 
@@ -291,12 +300,13 @@ pub fn create_router(
         ffmpeg_runner,
     };
 
+    // axum 0.7 + matchit 0.7 use ":name" path-param syntax; "{name}" is matchit 0.8 / axum 0.8.
     Router::new()
         .route("/api/health", get(health))
         .route("/api/jobs", post(create_job))
         .route("/api/jobs", get(list_jobs))
-        .route("/api/jobs/{job_id}", get(get_job))
-        .route("/api/jobs/{job_id}/artifact", get(get_artifact))
+        .route("/api/jobs/:job_id", get(get_job))
+        .route("/api/jobs/:job_id/artifact", get(get_artifact))
         .with_state(state)
 }
 
