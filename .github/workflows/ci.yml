@@ -21,5 +21,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: No unwrap/expect in production
+        run: cargo clippy --lib --bins --no-deps -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+
       - name: Tests
         run: cargo test --all
