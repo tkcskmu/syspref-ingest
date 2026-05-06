@@ -31,11 +31,11 @@ async fn dedup_registry_concurrent_access() {
 
     let first_id = results[0].0;
     assert!(
-        results.iter().all(|(id, _)| *id == first_id),
+        results.iter().all(|(id, _, _)| *id == first_id),
         "all tasks must observe the same canonical job_id"
     );
     assert_eq!(
-        results.iter().filter(|(_, dedup)| !*dedup).count(),
+        results.iter().filter(|(_, dedup, _)| !*dedup).count(),
         1,
         "exactly one task must have created the canonical job"
     );

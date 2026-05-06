@@ -36,12 +36,18 @@ def print_job_status(status: JobStatusResponse) -> None:
         print(f"  Error: {status.error}")
 
 
-def format_timestamp(dt_str: str) -> str:
-    """Format ISO timestamp for display."""
-    if dt_str is None:
+def format_timestamp(value) -> str:
+    """Format an ISO timestamp for display.
+
+    Accepts either a `datetime` (the shape produced by ``JobStatusResponse``)
+    or a raw ISO string. ``datetime`` objects also have a ``replace`` method
+    but its signature collides with ``str.replace``; routing through
+    ``isoformat()`` first avoids that footgun.
+    """
+    if value is None:
         return "-"
-    # Remove timezone info for cleaner display
-    return dt_str.replace("Z", "").replace("+00:00", "")
+    s = value.isoformat() if hasattr(value, "isoformat") else str(value)
+    return s.replace("Z", "").replace("+00:00", "")
 
 
 async def cmd_upload(client: VideoDigestClient, args: argparse.Namespace) -> int:
