@@ -2,3 +2,4 @@
 .venv
 .qwen
 Cargo.lock
+*.bak
