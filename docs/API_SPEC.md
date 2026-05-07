@@ -1,6 +1,6 @@
 # API Specification
 
-This document describes the target API contract. Endpoints will be implemented in later PRs.
+This document describes the API contract; the current implementation matches.
 
 ## Base URL
 
@@ -157,7 +157,7 @@ Errors:
 
 Returns recent jobs.
 
-Planned response:
+Response:
 
 ```json
 {

@@ -3,3 +3,5 @@
 .qwen
 Cargo.lock
 *.bak
+memory/
+__pycache__/

@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the target architecture. The implementation is not yet present in this repository.
+This document describes the current architecture.
 
 ## Overview
 

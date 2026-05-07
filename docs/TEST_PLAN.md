@@ -1,6 +1,6 @@
 # Test Plan
 
-This document describes the planned tests. Tests will be implemented along with the server in later PRs.
+This document describes the test plan for the current server implementation.
 
 ## Primary Safety Property
 
@@ -17,9 +17,9 @@ For the same (content_sha256, profile_name), only one canonical job is created.
 | 3 | `worker_no_duplicate_processing` | integration | Prove one queued job is processed at most once |
 | 4 | `incomplete_upload_no_job` | integration | Prove interrupted uploads do not register jobs |
 | 5 | `same_filename_different_content` | integration | Prove filenames are not identity |
-| 6 | `same_file_concurrent_upload` | HTTP integration | Prove end-to-end upload dedup after the API exists |
+| 6 | `same_file_concurrent_upload` | HTTP integration | Prove end-to-end upload dedup at the HTTP layer |
 
-The first implementation milestone should prioritize `tests/dedup_registry_concurrent.rs`. HTTP-level same-file concurrent upload testing can come later, after the upload API exists.
+`tests/dedup_registry_concurrent.rs` is the primary safety-property test. HTTP-level same-file concurrent upload coverage is provided by `tests/same_file_concurrent_upload.rs`.
 
 ## 1. `tests/dedup_registry_concurrent.rs`
 
@@ -101,7 +101,7 @@ Expected:
 
 ## 6. `same_file_concurrent_upload`
 
-This is a later HTTP integration test after `POST /api/jobs` exists.
+This is the HTTP integration test for the `POST /api/jobs` upload path.
 
 Setup:
 
@@ -132,7 +132,7 @@ Tests that exercise the worker pool (`worker_no_duplicate_processing`, `same_fil
 
 ## CI Quality Gates
 
-Once the Rust scaffold exists, CI should run:
+CI runs:
 
 ```bash
 cargo fmt --check

@@ -7,6 +7,13 @@
 //! `profiles`, `behavior`, with `MockBehavior::{AlwaysSucceed, AlwaysFail,
 //! Custom}`. `Custom` takes a `Send + Sync` closure so callers can capture
 //! external state (e.g., path log) for assertions.
+//!
+//! `#![allow(dead_code)]` is applied at module scope because each test
+//! file that imports `mod support;` only references a subset of the
+//! variants/methods, and clippy `-D warnings` would otherwise fail
+//! per-target builds.
+
+#![allow(dead_code)]
 
 use async_trait::async_trait;
 use std::path::Path;

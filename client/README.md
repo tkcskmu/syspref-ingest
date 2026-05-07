@@ -9,10 +9,16 @@ A Python command-line client for the Video Digest Server.
 
 ## Installation
 
+Use a virtualenv to avoid PEP 668 conflicts and missing-import errors:
+
 ```bash
 cd client
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+The client depends on `aiohttp` via `requirements.txt`. Without `aiohttp` installed, `python client.py --help` fails during import (in `client/api.py`) before argparse can print help.
 
 ## Usage
 

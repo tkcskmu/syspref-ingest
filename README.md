@@ -1,10 +1,10 @@
 # Video Digest Server
 
-Video Digest Server is a planned Rust/Tokio service for concurrent video uploads and FFmpeg transcoding.
+Video Digest Server is a Rust/Tokio service for concurrent video uploads and FFmpeg transcoding.
 
-When multiple clients upload the same video with the same profile, the target behavior is to create one canonical transcoding job and return that job ID to duplicate requests.
+When multiple clients upload the same video with the same profile, the server creates one canonical transcoding job and returns that job ID to duplicate requests.
 
-> Current status: design documentation only. Implementation will be added in later PRs.
+> Current status: implementation is present.
 
 ## Scope
 
@@ -75,7 +75,7 @@ sequenceDiagram
     B->>R: insert J2
 ```
 
-The planned fix is to perform lookup and registry mutation inside one mutex-protected critical section:
+The fix keeps lookup and registry mutation inside one mutex-protected critical section:
 
 ```mermaid
 flowchart TD
@@ -204,7 +204,7 @@ See [API specification](docs/API_SPEC.md#profile-configuration) for the full sch
 
 ## Quality Gates
 
-Once the Rust scaffold exists, CI should run:
+CI runs the following checks:
 
 ```bash
 cargo fmt --check
@@ -216,7 +216,7 @@ Implementation code should not use `unwrap()` or `expect()` outside tests.
 
 ## Benchmark Results
 
-Benchmark numbers are not target KPIs and should not be filled in before implementation. After implementation, measured results can be recorded with this template:
+Benchmark numbers are not target KPIs. Measured results can be recorded with this template once they are collected:
 
 | Scenario | Clients | Profile | Canonical jobs | Dedup hits | FFmpeg spawns | Duplicate jobs | Elapsed |
 |---|---:|---|---:|---:|---:|---:|---:|
